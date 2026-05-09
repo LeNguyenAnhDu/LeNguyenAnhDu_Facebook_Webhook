@@ -10,6 +10,7 @@ public interface ISpamDetectorService
 {
     Task<bool> IsSpamAsync(string userId, string text);
     Task<int> GetSpamCountIn24hAsync(string userId);
+    Task<bool> IsRateLimitedAsync(string userId);
 }
 
 public class SpamDetectorService : ISpamDetectorService
@@ -82,5 +83,20 @@ public class SpamDetectorService : ISpamDetectorService
         int count = bag.Count(time => time > threshold);
 
         return Task.FromResult(count);
+    }
+
+    public Task<bool> IsRateLimitedAsync(string userId)
+    {
+        if (string.IsNullOrEmpty(userId) || !_userMessageHistory.TryGetValue(userId, out var history))
+        {
+            return Task.FromResult(false);
+        }
+
+        // Đếm số lượng tin nhắn trong 1 phút vừa qua (Threshold = 20)
+        var oneMinuteAgo = DateTime.UtcNow.AddMinutes(-1);
+        int messagesInLastMinute = history.Count(m => m.Time > oneMinuteAgo);
+
+        // Nếu lớn hơn hoặc bằng 20 tin nhắn / phút -> Rate Limited
+        return Task.FromResult(messagesInLastMinute >= 20);
     }
 }

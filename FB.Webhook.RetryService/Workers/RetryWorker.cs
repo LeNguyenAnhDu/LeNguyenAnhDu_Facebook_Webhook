@@ -86,15 +86,21 @@ public class RetryWorker : BackgroundService
 
         if (failedEvent.RetryCount >= MaxRetryCount)
         {
-            _logger.LogError($"Event {failedEvent.OriginalEvent?.EventId} has reached max retry count ({MaxRetryCount}). Moving to Dead Letter (Mock).");
+            _logger.LogError($"Event {failedEvent.OriginalEvent?.EventId} has reached max retry count ({MaxRetryCount}). Moving to Dead Letter Queue.");
+            
+            // Cảnh báo Slack (Giả lập)
+            _logger.LogWarning("[SLACK ALERT] 🔴 Nguy hiểm! Một sự kiện đã rơi vào Dead Letter Queue. Cần vận hành viên xử lý thủ công!");
+            
+            // Đẩy vào Topic dead_letter
+            await _kafkaProducer.ProduceFailedEventAsync("dead_letter", failedEvent);
             return;
         }
 
         failedEvent.RetryCount++;
 
-        // Delay trước khi retry (Backoff strategy đơn giản)
-        var delaySeconds = 30 * failedEvent.RetryCount;
-        _logger.LogInformation($"Waiting for {delaySeconds} seconds before retrying...");
+        // Delay theo cơ chế Exponential Backoff (1s, 2s, 4s...)
+        var delaySeconds = (int)Math.Pow(2, failedEvent.RetryCount - 1);
+        _logger.LogInformation($"Exponential Backoff: Waiting for {delaySeconds} seconds before retrying...");
         await Task.Delay(TimeSpan.FromSeconds(delaySeconds));
 
         try

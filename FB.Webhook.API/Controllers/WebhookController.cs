@@ -99,6 +99,13 @@ public class WebhookController : ControllerBase
                     {
                         if (change.Value == null) continue;
                         
+                        // Bỏ qua các sự kiện do chính Page tạo ra để tránh vòng lặp vô hạn
+                        if (change.Value.From != null && change.Value.From.Id == pageId)
+                        {
+                            _logger.LogInformation($"Skipping event from Page itself (ID: {pageId}) to prevent infinite loops.");
+                            continue;
+                        }
+                        
                         var eventId = change.Value.CommentId ?? change.Value.PostId;
                         if (string.IsNullOrEmpty(eventId)) continue;
 
@@ -112,6 +119,13 @@ public class WebhookController : ControllerBase
                     foreach (var msg in entry.Messaging)
                     {
                         if (msg.Message == null) continue;
+                        
+                        // Bỏ qua tin nhắn do chính Page gửi đi
+                        if (msg.Sender != null && msg.Sender.Id == pageId)
+                        {
+                            _logger.LogInformation($"Skipping message from Page itself (ID: {pageId}) to prevent infinite loops.");
+                            continue;
+                        }
                         
                         var eventId = msg.Message.Mid;
                         if (string.IsNullOrEmpty(eventId)) continue;

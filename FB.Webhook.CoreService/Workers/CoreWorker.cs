@@ -99,6 +99,14 @@ public class CoreWorker : BackgroundService
     {
         try
         {
+            // IDEMPOTENT CHECK: Tránh xử lý lặp sự kiện đã hoàn thành
+            var currentStatus = await _stateTracker.GetEventStatusAsync(rawEvent.EventId);
+            if (currentStatus == EventStatus.Processed || currentStatus == EventStatus.Replied || currentStatus == EventStatus.Hidden || currentStatus == EventStatus.PendingReview)
+            {
+                _logger.LogInformation($"[IDEMPOTENT] Event {rawEvent.EventId} already processed (Status: {currentStatus}). Skipping duplicate.");
+                return;
+            }
+
             _logger.LogInformation($"Processing event {rawEvent.EventId}");
             await _stateTracker.UpdateEventStatusAsync(rawEvent.EventId, EventStatus.Processing);
             
@@ -141,9 +149,18 @@ public class CoreWorker : BackgroundService
                 return;
             }
 
+            // 2.5 Kiểm tra Rate Limiting (20 comments / minute)
+            if (await _spamDetector.IsRateLimitedAsync(userId))
+            {
+                _logger.LogWarning($"User {userId} hit RATE LIMIT. Sending to manual_review.");
+                await _stateTracker.UpdateEventStatusAsync(rawEvent.EventId, EventStatus.PendingReview);
+                await _kafkaProducer.ProduceAsync("manual_review", rawEvent);
+                return;
+            }
+
             // 3. AI Analysis
             var aiResult = await _aiService.AnalyzeContentAsync(text);
-            _logger.LogInformation($"AI Intent for {rawEvent.EventId}: {aiResult.Intent} with {(aiResult.Confidence * 100):0}% confidence");
+            _logger.LogInformation($"AI Intent for {rawEvent.EventId}: {aiResult.Intent} | Sentiment: {aiResult.Sentiment} | Confidence: {(aiResult.Confidence * 100):0}%");
 
             // 4. Action dựa trên Intent
             switch (aiResult.Intent)
@@ -158,7 +175,8 @@ public class CoreWorker : BackgroundService
                     break;
                 case Intent.Positive:
                     await _fbApiService.LikeCommentAsync(rawEvent.EventId);
-                    await _stateTracker.UpdateEventStatusAsync(rawEvent.EventId, EventStatus.Processed);
+                    await _fbApiService.ReplyToCommentAsync(rawEvent.EventId, "Cảm ơn bạn đã ủng hộ shop!");
+                    await _stateTracker.UpdateEventStatusAsync(rawEvent.EventId, EventStatus.Replied);
                     break;
                 case Intent.SpamLink:
                 case Intent.SpamRepeat:

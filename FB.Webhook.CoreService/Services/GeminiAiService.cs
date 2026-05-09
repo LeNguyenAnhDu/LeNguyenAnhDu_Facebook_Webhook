@@ -9,6 +9,8 @@ using FB.Webhook.Shared.Interfaces;
 using FB.Webhook.Shared.Models;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Polly;
+using Polly.CircuitBreaker;
 
 namespace FB.Webhook.CoreService.Services;
 
@@ -17,6 +19,17 @@ public class GeminiAiService : IAiService
     private readonly HttpClient _httpClient;
     private readonly IConfiguration _configuration;
     private readonly ILogger<GeminiAiService> _logger;
+
+    // Circuit Breaker: Ngắt mạch 30 giây nếu lỗi liên tiếp 10 lần
+    private static readonly AsyncCircuitBreakerPolicy CircuitBreakerPolicy = Policy
+        .Handle<HttpRequestException>()
+        .CircuitBreakerAsync(
+            exceptionsAllowedBeforeBreaking: 10,
+            durationOfBreak: TimeSpan.FromSeconds(30),
+            onBreak: (Exception ex, TimeSpan timespan) => { Console.WriteLine($"[CIRCUIT BREAKER] Gemini API broken for {timespan.TotalSeconds}s. Reason: {ex.Message}"); },
+            onReset: () => { Console.WriteLine("[CIRCUIT BREAKER] Gemini API reset."); },
+            onHalfOpen: () => { Console.WriteLine("[CIRCUIT BREAKER] Gemini API half-open."); }
+        );
 
     public GeminiAiService(HttpClient httpClient, IConfiguration configuration, ILogger<GeminiAiService> logger)
     {
@@ -62,7 +75,7 @@ Văn bản cần phân tích: ""{text}""
 
         try
         {
-            var response = await _httpClient.PostAsync(url, content);
+            var response = await CircuitBreakerPolicy.ExecuteAsync(() => _httpClient.PostAsync(url, content));
             response.EnsureSuccessStatusCode();
 
             var responseJson = await response.Content.ReadAsStringAsync();
@@ -83,6 +96,11 @@ Văn bản cần phân tích: ""{text}""
             
             var result = JsonSerializer.Deserialize<AiAnalysisResult>(textResult, options);
             return result ?? new AiAnalysisResult { Intent = Intent.Other, Confidence = 0 };
+        }
+        catch (BrokenCircuitException ex)
+        {
+            _logger.LogError(ex, "Gemini API Circuit Breaker is OPEN. Halting requests.");
+            throw; // Đẩy ra để chui vào send_failed
         }
         catch (HttpRequestException ex)
         {

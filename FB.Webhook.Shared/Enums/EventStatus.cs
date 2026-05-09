@@ -30,5 +30,10 @@ public enum EventStatus
     /// <summary>
     /// Xử lý thất bại
     /// </summary>
-    Failed
+    Failed,
+    
+    /// <summary>
+    /// Chờ duyệt thủ công do dính Rate Limit hoặc Spam Link
+    /// </summary>
+    PendingReview
 }
